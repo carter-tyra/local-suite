@@ -1,0 +1,34 @@
+{
+  "name": "local-suite",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server/index.ts",
+    "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
+    "typecheck": "tsc -b && tsc -p tsconfig.server.json",
+    "lint": "oxlint .",
+    "test": "tsx tests/smoke.test.ts",
+    "preview": "NODE_ENV=production tsx server/index.ts"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.101.1",
+    "express": "^5.2.1",
+    "lucide-react": "^1.21.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "oxlint": "^1.69.0",
+    "tsx": "^4.22.4",
+    "typescript": "~6.0.2",
+    "vite": "^8.1.0"
+  }
+}

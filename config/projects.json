@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "developerRoot": "/Users/cartertyra/developer",
+  "devctlPath": "/Users/cartertyra/.codex/bin/devctl",
+  "notes": "Local Suite project metadata. Docker stack metadata remains sourced from devctl.projects.json.",
+  "projects": [
+    {
+      "id": "local-suite",
+      "displayName": "Local Suite",
+      "path": "/Users/cartertyra/developer/local-suite",
+      "kind": "control-plane",
+      "priority": "active",
+      "tags": ["tooling", "local"]
+    },
+    {
+      "id": "aerial-sports",
+      "displayName": "aerial-sports",
+      "path": "/Users/cartertyra/developer/aerial-sports",
+      "kind": "sports-control-room",
+      "priority": "active",
+      "devctlProject": "aerial-sports",
+      "composeProject": "aerial-sports",
+      "tags": ["sports", "data", "heavy"]
+    },
+    {
+      "id": "agentdock",
+      "displayName": "AgentDock",
+      "path": "/Users/cartertyra/developer/AgentDock",
+      "kind": "agent-platform",
+      "priority": "active",
+      "composeProject": "agentdock",
+      "tags": ["agents", "workspace"]
+    },
+    {
+      "id": "dewpoint",
+      "displayName": "Dewpoint",
+      "path": "/Users/cartertyra/developer/dewpoint",
+      "kind": "app",
+      "priority": "active",
+      "devctlProject": "dewpoint",
+      "composeProject": "dewpoint",
+      "tags": ["product", "postgres"]
+    },
+    {
+      "id": "tradepass",
+      "displayName": "TradePass",
+      "path": "/Users/cartertyra/developer/TradePass",
+      "kind": "broker-ops",
+      "priority": "active",
+      "devctlProject": "tradepass-local",
+      "composeProject": "tradepass-local",
+      "tags": ["trade", "ops"]
+    },
+    {
+      "id": "atre-os",
+      "displayName": "atre-os",
+      "path": "/Users/cartertyra/developer/atre-os",
+      "kind": "platform",
+      "priority": "active",
+      "devctlProject": "atre-os",
+      "composeProject": "atre-os",
+      "tags": ["ai", "postgres"]
+    },
+    {
+      "id": "icue",
+      "displayName": "icue",
+      "path": "/Users/cartertyra/developer/icue",
+      "kind": "api",
+      "priority": "active",
+      "devctlProject": "icue-api",
+      "composeProject": "icue-api",
+      "tags": ["api", "postgres"]
+    },
+    {
+      "id": "ai-learning",
+      "displayName": "AI learning",
+      "path": "/Users/cartertyra/developer/indepth-ai-learning",
+      "kind": "learning-app",
+      "priority": "active",
+      "devctlProject": "ai-learning",
+      "composeProject": "in-depthailearningwebapp",
+      "tags": ["learning", "postgres"]
+    },
+    {
+      "id": "faceless-youtube-automation",
+      "displayName": "Faceless YouTube automation",
+      "path": "/Users/cartertyra/developer/faceless-youtube-automation",
+      "kind": "automation",
+      "priority": "active",
+      "devctlProject": "faceless-youtube-automation",
+      "composeProject": "faceless-youtube-automation",
+      "tags": ["youtube", "oauth"]
+    },
+    {
+      "id": "pga-tour-notify",
+      "displayName": "PGA TOUR Notify",
+      "path": "/Users/cartertyra/developer/PGA-TOUR-Notify",
+      "kind": "modeling",
+      "priority": "active",
+      "tags": ["golf", "models"]
+    }
+  ]
+}
