@@ -12,6 +12,8 @@
     "preview": "NODE_ENV=production tsx server/index.ts"
   },
   "dependencies": {
+    "@astryxdesign/core": "^0.1.1",
+    "@astryxdesign/theme-neutral": "^0.1.1",
     "@tanstack/react-query": "^5.101.1",
     "express": "^5.2.1",
     "lucide-react": "^1.21.0",
@@ -20,6 +22,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@astryxdesign/cli": "^0.1.1",
     "@playwright/test": "^1.61.1",
     "@types/express": "^5.0.6",
     "@types/node": "^24.13.2",
