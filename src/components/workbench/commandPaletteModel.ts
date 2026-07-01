@@ -1,12 +1,14 @@
 import type { BadgeVariant } from '@astryxdesign/core/Badge'
-import type { LocalSuiteSnapshot, ProjectSummary, RunTarget, SafeAction } from '../../shared/types.ts'
+import type { ActionRequest, LocalSuiteSnapshot, ProjectSummary, RunTarget, SafeAction } from '../../shared/types.ts'
 import {
   RUNTIME_ACTION_FIXTURE_PARAM,
   RUNTIME_ACTION_FIXTURES,
   type RuntimeActionFixtureId,
 } from './actionStateFixtures.ts'
 import {
+  actionApprovalLabel,
   actionLabel,
+  actionRequestMatches,
   actionReason,
   projectPortItems,
   projectPrimaryCommand,
@@ -54,6 +56,7 @@ interface BuildWorkbenchCommandsInput {
   currentDialog: WorkbenchDialog
   currentDetailTab: DetailTab
   isDev: boolean
+  pendingActionApproval: ActionRequest | null
   runtimeActionFixtureId: RuntimeActionFixtureId | null
   selectedProject: ProjectSummary | null
   selectedRunTarget: RunTarget | null
@@ -80,7 +83,7 @@ const VIEW_COMMANDS = [
 
 export function buildWorkbenchCommands(input: BuildWorkbenchCommandsInput): WorkbenchCommandItem[] {
   return [
-    ...buildActionCommands(input.selectedProject, input.selectedRunTarget, input.actionPending),
+    ...buildActionCommands(input.selectedProject, input.selectedRunTarget, input.actionPending, input.pendingActionApproval),
     ...buildDetailCommands(input.selectedProject, input.currentDetailTab),
     ...buildViewCommands(input.currentDialog),
     ...buildFixtureCommands(input.isDev, input.runtimeActionFixtureId),
@@ -113,6 +116,7 @@ function buildActionCommands(
   selectedProject: ProjectSummary | null,
   selectedRunTarget: RunTarget | null,
   actionPending: boolean,
+  pendingActionApproval: ActionRequest | null,
 ): WorkbenchCommandItem[] {
   if (!selectedProject) return []
 
@@ -127,11 +131,18 @@ function buildActionCommands(
       projectId: selectedProject.id,
       targetId,
     }
+    const approvalArmed = actionRequestMatches(pendingActionApproval, command)
 
     return makeCommandItem({
-      badge: disabledReason ? { label: 'blocked', variant: 'neutral' } : action.kind === 'process' ? { label: 'process', variant: 'warning' } : undefined,
+      badge: approvalArmed
+        ? { label: 'approval', variant: 'warning' }
+        : disabledReason
+          ? { label: 'blocked', variant: 'neutral' }
+          : action.kind === 'process'
+            ? { label: 'process', variant: 'warning' }
+            : undefined,
       command,
-      detail: disabledReason ?? actionReason(action, selectedRunTarget),
+      detail: approvalArmed ? 'Click again to run locally.' : disabledReason ?? actionReason(action, selectedRunTarget),
       disabledReason: disabledReason ?? undefined,
       group: 'Actions',
       keywords: compactKeywords(
@@ -144,7 +155,7 @@ function buildActionCommands(
         selectedRunTarget?.label,
         selectedRunTarget?.commandLabel,
       ),
-      label: actionLabel(action, selectedRunTarget),
+      label: approvalArmed ? actionApprovalLabel(action, selectedRunTarget) : actionLabel(action, selectedRunTarget),
       meta: selectedProject.displayName,
     })
   })

@@ -66,7 +66,12 @@ import {
   projectExceptionTone,
   selectedExceptionFrom,
 } from '../src/components/workbench/exceptionModel.ts'
-import { runtimeActionState } from '../src/components/workbench/model.ts'
+import {
+  actionApprovalLabel,
+  actionRequestMatches,
+  actionRequiresApproval,
+  runtimeActionState,
+} from '../src/components/workbench/model.ts'
 
 const config = loadConfig()
 const ids = new Set(config.projects.map((project) => project.id))
@@ -810,6 +815,44 @@ const commandProject: ProjectSummary = {
     },
   ],
 }
+assert.equal(actionRequiresApproval(commandProject.actions[0]!), true)
+assert.equal(actionRequiresApproval({
+  disabled: false,
+  id: 'docker-doctor',
+  kind: 'read',
+  label: 'Docker doctor',
+  reason: 'Read-only',
+}), false)
+assert.equal(actionApprovalLabel(commandProject.actions[0]!, localSuiteTarget), 'Confirm start')
+assert.equal(actionApprovalLabel({
+  disabled: false,
+  id: 'script-start',
+  kind: 'terminal',
+  label: 'Run build',
+  reason: 'Open Ghostty',
+}, {
+  commandLabel: 'pnpm run build',
+  id: 'script:build',
+  label: 'Run build',
+  manager: 'pnpm',
+  primary: false,
+  script: 'build',
+}), 'Confirm run')
+assert.equal(actionApprovalLabel(commandProject.actions[1]!, localSuiteTarget), 'Confirm stop')
+assert.equal(
+  actionRequestMatches(
+    { actionId: 'script-start', projectId: 'local-suite', targetId: localSuiteTarget.id },
+    { actionId: 'script-start', projectId: 'local-suite', targetId: localSuiteTarget.id },
+  ),
+  true,
+)
+assert.equal(
+  actionRequestMatches(
+    { actionId: 'script-start', projectId: 'local-suite', targetId: localSuiteTarget.id },
+    { actionId: 'script-start', projectId: 'local-suite', targetId: 'script:build' },
+  ),
+  false,
+)
 const runningDewpoint: ProjectSummary = {
   ...fixtureProjects[2]!,
   runtime: {
@@ -838,6 +881,7 @@ const workbenchCommands = buildWorkbenchCommands({
   currentDetailTab: 'run',
   currentDialog: null,
   isDev: true,
+  pendingActionApproval: null,
   runtimeActionFixtureId: null,
   selectedProject: commandProject,
   selectedRunTarget: localSuiteTarget,
@@ -863,6 +907,27 @@ if (!startCommand || startCommand.command.kind !== 'action') {
 }
 assert.equal(startCommand.disabledReason, undefined)
 assert.equal(startCommand.command.targetId, localSuiteTarget.id)
+const armedCommands = buildWorkbenchCommands({
+  actionPending: false,
+  currentDetailTab: 'run',
+  currentDialog: null,
+  isDev: true,
+  pendingActionApproval: {
+    actionId: 'script-start',
+    projectId: 'local-suite',
+    targetId: localSuiteTarget.id,
+  },
+  runtimeActionFixtureId: null,
+  selectedProject: commandProject,
+  selectedRunTarget: localSuiteTarget,
+  snapshot: commandSnapshot,
+})
+const armedStartCommand = armedCommands.find((command) => (
+  command.command.kind === 'action' && command.command.actionId === 'script-start'
+))
+assert.equal(armedStartCommand?.label, 'Confirm start')
+assert.equal(armedStartCommand?.detail, 'Click again to run locally.')
+assert.deepEqual(armedStartCommand?.badge, { label: 'approval', variant: 'warning' })
 const stopCommand = workbenchCommands.find((command) => (
   command.command.kind === 'action' && command.command.actionId === 'script-stop'
 ))
@@ -872,6 +937,7 @@ const noTargetCommands = buildWorkbenchCommands({
   currentDetailTab: 'run',
   currentDialog: null,
   isDev: true,
+  pendingActionApproval: null,
   runtimeActionFixtureId: null,
   selectedProject: {
     ...commandProject,
@@ -893,6 +959,7 @@ const activeFixtureCommands = buildWorkbenchCommands({
   currentDetailTab: 'run',
   currentDialog: null,
   isDev: true,
+  pendingActionApproval: null,
   runtimeActionFixtureId: 'pending-start',
   selectedProject: commandProject,
   selectedRunTarget: localSuiteTarget,
@@ -905,6 +972,7 @@ assert.equal(
     currentDetailTab: 'run',
     currentDialog: null,
     isDev: false,
+    pendingActionApproval: null,
     runtimeActionFixtureId: null,
     selectedProject: commandProject,
     selectedRunTarget: localSuiteTarget,

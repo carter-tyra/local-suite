@@ -13,7 +13,9 @@ import { VStack } from '@astryxdesign/core/VStack'
 import { CheckmarkOutline, ListChecked, Warning } from '@carbon/icons-react'
 import type { ActionRequest, ProjectSummary, RunTarget, SafeAction } from '../../shared/types.ts'
 import {
+  actionApprovalLabel,
   actionLabel,
+  actionRequestMatches,
   actionReason,
   eventDotVariant,
   projectPrimaryCommand,
@@ -35,6 +37,7 @@ export function ExceptionsWorkbench({
   onDialogOpen,
   onSelectException,
   onSelectProject,
+  pendingActionApproval,
   project,
   projectById,
   selectedException,
@@ -48,6 +51,7 @@ export function ExceptionsWorkbench({
   onDialogOpen: (dialog: WorkbenchDialog) => void
   onSelectException: (exceptionId: string) => void
   onSelectProject: (projectId: string) => void
+  pendingActionApproval: ActionRequest | null
   project: ProjectSummary | null
   projectById: Map<string, ProjectSummary>
   selectedException: WorkbenchException
@@ -95,6 +99,7 @@ export function ExceptionsWorkbench({
           onAction={onAction}
           onDialogOpen={onDialogOpen}
           onSelectProject={onSelectProject}
+          pendingActionApproval={pendingActionApproval}
           project={project}
           selectedRunTarget={selectedRunTarget}
         />
@@ -173,6 +178,7 @@ function ProjectInspector({
   onAction,
   onDialogOpen,
   onSelectProject,
+  pendingActionApproval,
 }: {
   actionPending: boolean
   actionRequest: ActionRequest | null
@@ -182,6 +188,7 @@ function ProjectInspector({
   onAction: (actionId: SafeAction['id'], projectId?: string, targetId?: string) => void
   onDialogOpen: (dialog: WorkbenchDialog) => void
   onSelectProject: (projectId: string) => void
+  pendingActionApproval: ActionRequest | null
   project: ProjectSummary | null
   selectedRunTarget: RunTarget | null
 }) {
@@ -224,6 +231,7 @@ function ProjectInspector({
           actionPending={actionPending}
           actionRequest={actionRequest}
           onAction={onAction}
+          pendingActionApproval={pendingActionApproval}
           project={project}
           selectedRunTarget={selectedRunTarget}
         />
@@ -266,20 +274,40 @@ function SafeActionGrid({
   actionPending,
   actionRequest,
   onAction,
+  pendingActionApproval,
 }: {
   actionPending: boolean
   actionRequest: ActionRequest | null
   onAction: (actionId: SafeAction['id'], projectId?: string, targetId?: string) => void
+  pendingActionApproval: ActionRequest | null
   project: ProjectSummary
   selectedRunTarget: RunTarget | null
 }) {
+  const approvalArmed = project.actions.some((action) => {
+    const isStartAction = action.id === 'script-start'
+    return actionRequestMatches(pendingActionApproval, {
+      actionId: action.id,
+      projectId: project.id,
+      targetId: isStartAction ? selectedRunTarget?.id : undefined,
+    })
+  })
+
   return (
     <VStack gap={1}>
-      <Text color="secondary" type="label">Safe actions</Text>
+      <HStack align="center" justify="between">
+        <Text color="secondary" type="label">Safe actions</Text>
+        {approvalArmed ? <Badge label="approval needed" variant="warning" /> : null}
+      </HStack>
       <Grid className="inspector-actions" columns={{ minWidth: 132, max: 2 }} gap={1}>
         {project.actions.map((action) => {
           const isStartAction = action.id === 'script-start'
           const isActionPending = actionPending && actionRequest?.actionId === action.id
+          const request: ActionRequest = {
+            actionId: action.id,
+            projectId: project.id,
+            targetId: isStartAction ? selectedRunTarget?.id : undefined,
+          }
+          const isApprovalArmed = actionRequestMatches(pendingActionApproval, request)
           const disabled = action.disabled || actionPending || (isStartAction && !selectedRunTarget) || (action.id === 'script-stop' && project.runtime.status !== 'running')
           return (
             <Button
@@ -287,15 +315,20 @@ function SafeActionGrid({
               isDisabled={disabled}
               isLoading={isActionPending}
               key={action.id}
-              label={actionLabel(action, selectedRunTarget)}
+              label={isApprovalArmed ? actionApprovalLabel(action, selectedRunTarget) : actionLabel(action, selectedRunTarget)}
               onClick={() => onAction(action.id, project.id, isStartAction ? selectedRunTarget?.id : undefined)}
               size="sm"
-              tooltip={actionReason(action, selectedRunTarget)}
+              tooltip={isApprovalArmed ? 'Click again to approve' : actionReason(action, selectedRunTarget)}
               variant={isStartAction && !action.disabled ? 'primary' : action.kind === 'process' ? 'destructive' : 'secondary'}
             />
           )
         })}
       </Grid>
+      {approvalArmed ? (
+        <Section className="action-approval-note" padding={1} variant="transparent">
+          <Text color="secondary" type="supporting">Click again to run locally.</Text>
+        </Section>
+      ) : null}
     </VStack>
   )
 }

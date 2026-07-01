@@ -415,6 +415,13 @@
   background: color-mix(in srgb, var(--color-background-muted) 72%, transparent);
 }
 
+.action-approval-note {
+  min-width: 0;
+  border: var(--border-width) solid color-mix(in srgb, var(--color-border-yellow) 68%, var(--color-border));
+  border-radius: var(--radius-element);
+  background: color-mix(in srgb, var(--color-background-yellow) 16%, var(--color-background-surface));
+}
+
 .control-dock {
   position: sticky;
   bottom: 0;

@@ -52,6 +52,29 @@ export function actionReason(action: SafeAction, selectedRunTarget: RunTarget | 
   return action.reason
 }
 
+export function actionRequiresApproval(action: SafeAction): boolean {
+  return action.kind === 'terminal' || action.kind === 'process'
+}
+
+export function actionApprovalLabel(action: SafeAction, selectedRunTarget: RunTarget | null): string {
+  const label = actionLabel(action, selectedRunTarget)
+  if (action.id === 'script-stop') return 'Confirm stop'
+  if (label.startsWith('Run ')) return 'Confirm run'
+  return 'Confirm start'
+}
+
+export function actionRequestMatches(
+  current: ActionRequest | null,
+  next: ActionRequest,
+): boolean {
+  return actionRequestKey(current) === actionRequestKey(next)
+}
+
+function actionRequestKey(request: ActionRequest | null): string {
+  if (!request) return ''
+  return `${request.actionId}:${request.projectId ?? ''}:${request.targetId ?? ''}`
+}
+
 export function runtimeActionState(input: {
   actionError: string | null
   actionResult: ActionResult | null

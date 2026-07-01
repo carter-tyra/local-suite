@@ -13,7 +13,9 @@ import { VStack } from '@astryxdesign/core/VStack'
 import { Box, Play, StopOutline, Terminal } from '@carbon/icons-react'
 import type { ActionRequest, ActionResult, LocalSuiteSnapshot, ProjectSummary, RunTarget, SafeAction } from '../../shared/types.ts'
 import {
+  actionApprovalLabel,
   actionLabel,
+  actionRequestMatches,
   actionReason,
   projectPortItems,
   projectPrimaryCommand,
@@ -44,6 +46,7 @@ export function ControlDock({
   onRunTargetChange,
   onAction,
   onDialogOpen,
+  pendingActionApproval,
 }: {
   project: ProjectSummary | null
   snapshot: LocalSuiteSnapshot
@@ -59,8 +62,22 @@ export function ControlDock({
   onRunTargetChange: (projectId: string, targetId: string) => void
   onAction: (actionId: SafeAction['id'], projectId?: string, targetId?: string) => void
   onDialogOpen: (dialog: WorkbenchDialog) => void
+  pendingActionApproval: ActionRequest | null
 }) {
   if (!project) return null
+  const startAction = project.actions.find((action) => action.id === 'script-start') ?? null
+  const stopAction = project.actions.find((action) => action.id === 'script-stop') ?? null
+  const startRequest: ActionRequest = {
+    actionId: 'script-start',
+    projectId: project.id,
+    targetId: selectedRunTarget?.id,
+  }
+  const stopRequest: ActionRequest = {
+    actionId: 'script-stop',
+    projectId: project.id,
+  }
+  const isStartApprovalArmed = actionRequestMatches(pendingActionApproval, startRequest)
+  const isStopApprovalArmed = actionRequestMatches(pendingActionApproval, stopRequest)
 
   return (
     <Section aria-label="Selected project" className="control-dock" padding={0} variant="transparent">
@@ -84,7 +101,7 @@ export function ControlDock({
               icon={<Play size={16} />}
               isDisabled={actionPending || !selectedRunTarget}
               isLoading={actionPending && actionRequest?.actionId === 'script-start'}
-              label={selectedRunTarget?.label ?? 'Start'}
+              label={isStartApprovalArmed && startAction ? actionApprovalLabel(startAction, selectedRunTarget) : selectedRunTarget?.label ?? 'Start'}
               onClick={() => onAction('script-start', project.id, selectedRunTarget?.id)}
               size="sm"
               variant="primary"
@@ -93,7 +110,7 @@ export function ControlDock({
               icon={<StopOutline size={16} />}
               isDisabled={actionPending || project.runtime.status !== 'running'}
               isLoading={actionPending && actionRequest?.actionId === 'script-stop'}
-              label="Stop"
+              label={isStopApprovalArmed && stopAction ? actionApprovalLabel(stopAction, selectedRunTarget) : 'Stop'}
               onClick={() => onAction('script-stop', project.id)}
               size="sm"
               variant="destructive"
@@ -121,6 +138,7 @@ export function ControlDock({
               actionState={actionState}
               onAction={onAction}
               onRunTargetChange={onRunTargetChange}
+              pendingActionApproval={pendingActionApproval}
               project={project}
               selectedRunTarget={selectedRunTarget}
               selectedRunTargetId={selectedRunTargetId}
@@ -150,6 +168,7 @@ function RunDock({
   actionError,
   onRunTargetChange,
   onAction,
+  pendingActionApproval,
 }: {
   project: ProjectSummary
   selectedRunTarget: RunTarget | null
@@ -160,7 +179,17 @@ function RunDock({
   actionError: string | null
   onRunTargetChange: (projectId: string, targetId: string) => void
   onAction: (actionId: SafeAction['id'], projectId?: string, targetId?: string) => void
+  pendingActionApproval: ActionRequest | null
 }) {
+  const approvalArmed = project.actions.some((action) => {
+    const isStartAction = action.id === 'script-start'
+    return actionRequestMatches(pendingActionApproval, {
+      actionId: action.id,
+      projectId: project.id,
+      targetId: isStartAction ? selectedRunTarget?.id : undefined,
+    })
+  })
+
   return (
     <Grid columns={{ minWidth: 260, max: 3 }} gap={1.5}>
       <VStack gap={1}>
@@ -183,25 +212,39 @@ function RunDock({
         {actionState ? <RuntimeStatePanel state={actionState} /> : null}
       </VStack>
       <VStack gap={1}>
-        <Text color="secondary" type="label">Safe actions</Text>
+        <HStack align="center" justify="between">
+          <Text color="secondary" type="label">Safe actions</Text>
+          {approvalArmed ? <Badge label="approval needed" variant="warning" /> : null}
+        </HStack>
         <Grid className="dock-actions" columns={{ minWidth: 140, max: 2 }} gap={1}>
           {project.actions.map((action) => {
             const isStartAction = action.id === 'script-start'
             const isActionPending = actionPending && actionRequest?.actionId === action.id
+            const request: ActionRequest = {
+              actionId: action.id,
+              projectId: project.id,
+              targetId: isStartAction ? selectedRunTarget?.id : undefined,
+            }
+            const isApprovalArmed = actionRequestMatches(pendingActionApproval, request)
             return (
               <Button
                 icon={<ActionIcon action={action} isPending={isActionPending} />}
                 isDisabled={action.disabled || actionPending || (isStartAction && !selectedRunTarget)}
                 key={action.id}
-                label={actionLabel(action, selectedRunTarget)}
+                label={isApprovalArmed ? actionApprovalLabel(action, selectedRunTarget) : actionLabel(action, selectedRunTarget)}
                 onClick={() => onAction(action.id, project.id, isStartAction ? selectedRunTarget?.id : undefined)}
                 size="sm"
-                tooltip={actionReason(action, selectedRunTarget)}
+                tooltip={isApprovalArmed ? 'Click again to approve' : actionReason(action, selectedRunTarget)}
                 variant={isStartAction && !action.disabled ? 'primary' : action.kind === 'process' ? 'destructive' : 'secondary'}
               />
             )
           })}
         </Grid>
+        {approvalArmed ? (
+          <Section className="action-approval-note" padding={1} variant="transparent">
+            <Text color="secondary" type="supporting">Click again to run locally.</Text>
+          </Section>
+        ) : null}
         {actionError ? <Text color="secondary" role="alert" type="supporting">{actionError}</Text> : null}
       </VStack>
       <VStack gap={1}>

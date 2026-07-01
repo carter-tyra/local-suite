@@ -22,7 +22,13 @@ import { createRuntimeActionFixture, runtimeActionFixtureFromSearch } from './co
 import { WorkbenchCommandPalette } from './components/workbench/CommandPalette.tsx'
 import { searchForRuntimeActionFixture, type WorkbenchCommand } from './components/workbench/commandPaletteModel.ts'
 import { buildWorkbenchExceptions, selectedExceptionFrom } from './components/workbench/exceptionModel.ts'
-import { runTargetForProject, runtimeActionState, toDetailTab } from './components/workbench/model.ts'
+import {
+  actionRequestMatches,
+  actionRequiresApproval,
+  runTargetForProject,
+  runtimeActionState,
+  toDetailTab,
+} from './components/workbench/model.ts'
 import type { DetailTab, DockerRefreshControlState, WorkbenchDialog } from './components/workbench/types.ts'
 
 async function refreshDockerDiagnosticsInDev() {
@@ -45,6 +51,7 @@ function App() {
   const [selectedExceptionId, setSelectedExceptionId] = useState<string | null>(null)
   const [runtimeActionFixtureSearch, setRuntimeActionFixtureSearch] = useState(() => window.location.search)
   const [lastActionRequest, setLastActionRequest] = useState<ActionRequest | null>(null)
+  const [pendingActionApproval, setPendingActionApproval] = useState<ActionRequest | null>(null)
   const [actionResult, setActionResult] = useState<ActionResult | null>(null)
   const commandPaletteTriggerRef = useRef<HTMLButtonElement>(null)
   const queryClient = useQueryClient()
@@ -137,11 +144,29 @@ function App() {
     : null
 
   const handleAction = (actionId: SafeAction['id'], projectId?: string, targetId?: string) => {
-    actionMutation.mutate({
+    const request: ActionRequest = {
       actionId,
       projectId,
       targetId: actionId === 'script-start' ? targetId : undefined,
-    })
+    }
+    const project = request.projectId ? projectById.get(request.projectId) ?? null : null
+    const action = project?.actions.find((item) => item.id === actionId) ?? null
+
+    if (action && actionRequiresApproval(action) && !actionRequestMatches(pendingActionApproval, request)) {
+      setPendingActionApproval(request)
+      setActionResult(null)
+      return
+    }
+
+    setPendingActionApproval(null)
+    actionMutation.mutate(request)
+  }
+
+  const selectProjectFromRail = (projectId: string) => {
+    setSelectedId(projectId)
+    setPendingActionApproval(null)
+    const relatedException = workbenchExceptions.find((exception) => exception.projectIds.includes(projectId))
+    if (relatedException) setSelectedExceptionId(relatedException.id)
   }
 
   const closeCommandPalette = () => {
@@ -153,6 +178,7 @@ function App() {
     const nextSearch = searchForRuntimeActionFixture(window.location.search, fixtureId)
     const nextUrl = `${window.location.pathname}${nextSearch}${window.location.hash}`
     window.history.replaceState(window.history.state, '', nextUrl)
+    setPendingActionApproval(null)
     setRuntimeActionFixtureSearch(nextSearch)
   }
 
@@ -161,7 +187,7 @@ function App() {
       setFleetKind('all')
       setFleetQuery('')
       setFleetStatus('all')
-      setSelectedId(command.projectId)
+      selectProjectFromRail(command.projectId)
       setDialog(null)
       return
     }
@@ -256,7 +282,7 @@ function App() {
                 setFleetQuery('')
                 setFleetStatus('all')
               }}
-              onSelect={setSelectedId}
+              onSelect={selectProjectFromRail}
               projects={filteredProjects}
               query={fleetQuery}
               selectedId={selectedProject?.id ?? null}
@@ -274,6 +300,7 @@ function App() {
                 onSelectProject={setSelectedId}
                 project={displayedSelectedProject}
                 projectById={projectById}
+                pendingActionApproval={pendingActionApproval}
                 selectedException={selectedException}
                 selectedRunTarget={selectedRunTarget}
               />
@@ -301,6 +328,7 @@ function App() {
               setRunTargetByProject((current) => ({ ...current, [projectId]: targetId }))
             }}
             onTabChange={(tab) => setDetailTab(toDetailTab(tab))}
+            pendingActionApproval={pendingActionApproval}
             project={displayedSelectedProject}
             selectedRunTarget={selectedRunTarget}
             selectedRunTargetId={selectedRunTargetId}
@@ -327,6 +355,7 @@ function App() {
               }
               closeCommandPalette()
             }}
+            pendingActionApproval={pendingActionApproval}
             runtimeActionFixtureId={runtimeActionFixtureId}
             selectedProject={selectedProject}
             selectedRunTarget={selectedRunTarget}

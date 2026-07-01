@@ -6,7 +6,7 @@ import { Kbd } from '@astryxdesign/core/Kbd'
 import { Text } from '@astryxdesign/core/Text'
 import { createStaticSource } from '@astryxdesign/core/Typeahead'
 import { VStack } from '@astryxdesign/core/VStack'
-import type { LocalSuiteSnapshot, ProjectSummary, RunTarget } from '../../shared/types.ts'
+import type { ActionRequest, LocalSuiteSnapshot, ProjectSummary, RunTarget } from '../../shared/types.ts'
 import type { RuntimeActionFixtureId } from './actionStateFixtures.ts'
 import {
   buildWorkbenchCommands,
@@ -23,6 +23,7 @@ export function WorkbenchCommandPalette({
   isOpen,
   onCommandSelect,
   onOpenChange,
+  pendingActionApproval,
   runtimeActionFixtureId,
   selectedProject,
   selectedRunTarget,
@@ -35,6 +36,7 @@ export function WorkbenchCommandPalette({
   isOpen: boolean
   onCommandSelect: (command: WorkbenchCommand) => void
   onOpenChange: (isOpen: boolean) => void
+  pendingActionApproval: ActionRequest | null
   runtimeActionFixtureId: RuntimeActionFixtureId | null
   selectedProject: ProjectSummary | null
   selectedRunTarget: RunTarget | null
@@ -45,6 +47,7 @@ export function WorkbenchCommandPalette({
     currentDialog,
     currentDetailTab,
     isDev,
+    pendingActionApproval,
     runtimeActionFixtureId,
     selectedProject,
     selectedRunTarget,
@@ -54,6 +57,7 @@ export function WorkbenchCommandPalette({
     currentDialog,
     currentDetailTab,
     isDev,
+    pendingActionApproval,
     runtimeActionFixtureId,
     selectedProject,
     selectedRunTarget,

@@ -17,6 +17,7 @@ dist-ssr
 artifacts/
 output/
 .impeccable/
+.playwright-cli/
 playwright-report/
 test-results/
 

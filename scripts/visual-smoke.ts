@@ -56,6 +56,7 @@ async function main() {
 
     const desktopPage = await openCheckedPage(browser, baseUrl, { width: 1440, height: 900 })
     await desktopPage.screenshot({ fullPage: true, path: screenshotPaths.desktop })
+    await assertLocalActionApprovalGate(desktopPage)
     await openCommandPalette(desktopPage)
     await assertPageSafe(desktopPage, { width: 1440, height: 900 })
     await desktopPage.screenshot({ fullPage: true, path: screenshotPaths.commandPaletteDesktop })
@@ -144,6 +145,16 @@ async function openCommandPalette(page: Page) {
     await dialog.waitFor({ timeout: 10_000 })
   }
   await page.getByPlaceholder('Run or open').waitFor({ timeout: 10_000 })
+}
+
+async function assertLocalActionApprovalGate(page: Page) {
+  const blockedBefore = blockedActionRequests.length
+  await page.getByRole('button', { name: /^Start dev$/ }).first().click()
+  await page.getByRole('button', { name: /^Confirm start$/ }).first().waitFor({ timeout: 10_000 })
+  await page.getByText('Click again to run locally.').first().waitFor({ timeout: 10_000 })
+  if (blockedActionRequests.length !== blockedBefore) {
+    throw new Error('Approval gate sent a mutating action request on first click.')
+  }
 }
 
 async function assertPageSafe(
