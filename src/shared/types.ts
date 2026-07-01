@@ -2,7 +2,18 @@ export type Priority = 'active' | 'watch' | 'archive'
 
 export type ProjectStatus = 'ready' | 'attention' | 'idle' | 'unknown'
 
-export type ActionKind = 'read' | 'preview' | 'blocked'
+export type ActionKind = 'read' | 'preview' | 'terminal' | 'process' | 'blocked'
+
+export const SAFE_ACTION_IDS = [
+  'script-start',
+  'script-stop',
+  'devctl-up-preview',
+  'devctl-down-preview',
+  'docker-doctor',
+  'stop-candidates',
+] as const
+
+export type SafeActionId = typeof SAFE_ACTION_IDS[number]
 
 export interface ProjectConfig {
   id: string
@@ -30,6 +41,57 @@ export interface PackageSummary {
   manager: 'pnpm' | 'npm' | 'yarn' | 'bun' | 'unknown'
   hasWorkspace: boolean
   scripts: string[]
+}
+
+export interface RunTarget {
+  commandLabel: string
+  id: string
+  label: string
+  manager: PackageSummary['manager']
+  primary: boolean
+  script: string
+}
+
+export interface ProjectRuntimeProcess {
+  bindIp: string | null
+  command: string
+  pid: number
+  port: string | null
+  processGroupPid?: number
+  registryId?: string
+  scope: ListenerPort['scope']
+  source?: 'listener' | 'registry'
+  startedAt?: string
+  targetId?: string
+}
+
+export interface ProjectRuntimeHistoryEntry {
+  childPid: number | null
+  commandLabel: string
+  entryId: string
+  exitCode: number | null
+  exitedAt: string | null
+  runnerPid: number | null
+  script: string
+  signal: string | null
+  startedAt: string
+  status: 'starting' | 'running' | 'exited' | 'failed' | 'stale'
+  stopExitCode: number | null
+  stopRequestedAt: string | null
+  stopRequestedBy: 'local-suite' | null
+  stopResult: 'sent' | 'failed' | null
+  stopSignal: string | null
+  targetId: string
+  updatedAt: string
+}
+
+export interface ProjectRuntimeSummary {
+  history: ProjectRuntimeHistoryEntry[]
+  ownedProcesses: ProjectRuntimeProcess[]
+  primaryTarget: RunTarget | null
+  status: 'running' | 'stopped'
+  stopReason: string
+  targets: RunTarget[]
 }
 
 export interface DockerPort {
@@ -74,14 +136,60 @@ export interface ListenerPort {
   bindIp: string
   port: string
   scope: 'local' | 'public' | 'unknown'
+  owner: 'local-suite' | 'external'
+  projectId: string | null
+  projectMatch: 'local-suite' | 'docker-port' | 'process-cwd' | null
+  ruleKey: string
+  classification: 'ignored' | null
+  classificationReason: string | null
+}
+
+export interface IgnoredListenerRule {
+  bindIp: string
+  command: string
+  createdAt: string
+  key: string
+  port: string
+  reason: string
+  scope: ListenerPort['scope']
+}
+
+export interface ListenerRulesFile {
+  version: 1
+  ignored: IgnoredListenerRule[]
+}
+
+export interface ListenerRulesSummary {
+  ignoredCount: number
+  ignored: IgnoredListenerRule[]
+}
+
+export interface ListenerRulePreview {
+  action: 'ignore'
+  alreadyIgnored: boolean
+  generatedAt: string
+  key: string
+  matchingListeners: number
+  reason: string
+}
+
+export interface ListenerRuleMutationResult extends ListenerRulePreview {
+  applied: boolean
+  ignoredCount: number
 }
 
 export interface SafeAction {
-  id: 'devctl-up-preview' | 'devctl-down-preview' | 'docker-doctor' | 'stop-candidates'
+  id: SafeActionId
   label: string
   kind: ActionKind
   disabled: boolean
   reason: string
+}
+
+export interface ActionRequest {
+  actionId: SafeActionId
+  projectId?: string
+  targetId?: string
 }
 
 export interface ProjectSummary {
@@ -97,6 +205,7 @@ export interface ProjectSummary {
   signals: string[]
   git: GitSummary
   package: PackageSummary | null
+  runtime: ProjectRuntimeSummary
   docker: DockerProjectSummary | null
   actions: SafeAction[]
 }
@@ -123,6 +232,53 @@ export interface SnapshotSummary {
   packageProjects: number
 }
 
+export interface SnapshotTiming {
+  totalMs: number
+  phases: Record<string, number>
+}
+
+export interface DockerStateInfo {
+  ageMs: number
+  freshForMs: number
+  generatedAt: string
+  source: 'fresh' | 'cached'
+}
+
+export interface SnapshotCacheInfo {
+  ageMs: number
+  freshForMs: number
+  generatedAt: string
+  maxStaleMs: number
+  state: 'miss' | 'fresh' | 'stale' | 'refreshing' | 'expired'
+}
+
+export interface SnapshotDiagnostics {
+  cache: {
+    ageMs: number | null
+    freshForMs: number
+    generatedAt: string | null
+    hasSnapshot: boolean
+    lastRefreshFailedAt: string | null
+    maxStaleMs: number
+    refreshInFlight: boolean
+    state: SnapshotCacheInfo['state'] | 'empty'
+  }
+  snapshot: {
+    counts: {
+      attentionProjects: number
+      dirtyRepos: number
+      listeners: number
+      projects: number
+      publicDockerPorts: number
+      runningContainers: number
+      warnings: number
+    }
+    dockerState: DockerStateInfo
+    generatedAt: string
+    timing: SnapshotTiming
+  } | null
+}
+
 export interface LocalSuiteSnapshot {
   generatedAt: string
   roots: string[]
@@ -130,6 +286,10 @@ export interface LocalSuiteSnapshot {
   docker: DockerFleetSummary
   projects: ProjectSummary[]
   listeners: ListenerPort[]
+  listenerRules: ListenerRulesSummary
+  dockerState: DockerStateInfo
+  timing: SnapshotTiming
+  cache?: SnapshotCacheInfo
   warnings: string[]
 }
 

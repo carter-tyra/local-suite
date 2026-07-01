@@ -1,20 +1,32 @@
 import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { performance } from 'node:perf_hooks'
 import type {
   DockerProjectSummary,
   GitSummary,
   ListenerPort,
   LocalSuiteSnapshot,
   PackageSummary,
+  ProjectRuntimeHistoryEntry,
+  ProjectRuntimeProcess,
+  ProjectRuntimeSummary,
   ProjectConfig,
   ProjectStatus,
   ProjectSummary,
   SafeAction,
 } from '../src/shared/types.ts'
+import { listenerRuleKey } from '../src/shared/listenerRules.ts'
+import { getRunTargets } from '../src/shared/runTargets.ts'
 import type { SuiteConfig } from './config.ts'
 import { runCommand } from './command.ts'
 import { collectDevctl, type DevctlState } from './devctl.ts'
+import { applyListenerRulesToListeners, readListenerRules, summarizeListenerRules } from './listenerRules.ts'
+import {
+  readProcessRegistrySnapshot,
+  registryHistoryForProject,
+  registryRuntimeProcessesForProject,
+} from './processRegistry.ts'
 
 const IGNORE_DIRS = new Set([
   '.Trash',
@@ -29,6 +41,19 @@ const IGNORE_DIRS = new Set([
   'Public',
   'node_modules',
 ])
+
+async function timePhase<T>(
+  phases: Record<string, number>,
+  name: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const start = performance.now()
+  try {
+    return await work()
+  } finally {
+    phases[name] = Math.round(performance.now() - start)
+  }
+}
 
 async function pathExists(target: string): Promise<boolean> {
   try {
@@ -67,7 +92,7 @@ function packageManagerFor(projectPath: string): PackageSummary['manager'] {
   return 'unknown'
 }
 
-async function readPackageSummary(projectPath: string): Promise<PackageSummary | null> {
+export async function readPackageSummary(projectPath: string): Promise<PackageSummary | null> {
   const packageJsonPath = path.join(projectPath, 'package.json')
   const packageJson = await readJsonFile<{ name?: string; scripts?: Record<string, string> }>(packageJsonPath)
   if (!packageJson) return null
@@ -133,7 +158,7 @@ async function readGitSummary(projectPath: string): Promise<GitSummary> {
   }
 }
 
-async function discoverRootProjects(developerRoot: string): Promise<ProjectConfig[]> {
+export async function discoverRootProjects(developerRoot: string): Promise<ProjectConfig[]> {
   const entries = await fs.readdir(developerRoot, { withFileTypes: true })
   const projects: ProjectConfig[] = []
 
@@ -162,6 +187,14 @@ async function discoverRootProjects(developerRoot: string): Promise<ProjectConfi
   return projects
 }
 
+export async function resolveProjectById(config: SuiteConfig, projectId: string): Promise<ProjectConfig | null> {
+  const configuredProject = config.projects.find((project) => project.id === projectId)
+  if (configuredProject) return configuredProject
+
+  const discoveredProjects = await discoverRootProjects(config.developerRoot)
+  return discoveredProjects.find((project) => project.id === projectId) ?? null
+}
+
 function dockerFor(project: ProjectConfig, devctl: DevctlState): DockerProjectSummary | null {
   if (project.devctlProject) {
     const byName = devctl.byRegistryName.get(project.devctlProject)
@@ -186,23 +219,39 @@ function dockerFor(project: ProjectConfig, devctl: DevctlState): DockerProjectSu
   return null
 }
 
-function actionsFor(project: ProjectConfig, hasDocker: boolean): SafeAction[] {
+function actionsFor(project: ProjectConfig, hasDocker: boolean, runtime: ProjectRuntimeSummary): SafeAction[] {
   const canPreview = Boolean(project.devctlProject)
+  const canStart = Boolean(runtime.primaryTarget)
+  const canStop = runtime.ownedProcesses.length > 0
 
   return [
+    {
+      id: 'script-start',
+      label: runtime.primaryTarget?.label ?? 'Start dev',
+      kind: 'terminal',
+      disabled: !canStart,
+      reason: runtime.primaryTarget ? `Open Ghostty / ${runtime.primaryTarget.commandLabel}` : 'No runnable script',
+    },
+    {
+      id: 'script-stop',
+      label: 'Stop dev',
+      kind: 'process',
+      disabled: !canStop,
+      reason: canStop ? runtime.stopReason : 'No project-owned process',
+    },
     {
       id: 'devctl-up-preview',
       label: 'Preview up',
       kind: 'preview',
       disabled: !canPreview,
-      reason: canPreview ? 'Dry run only' : 'No devctl project',
+      reason: canPreview ? 'Docker dry run' : 'No devctl project',
     },
     {
       id: 'devctl-down-preview',
       label: 'Preview down',
       kind: 'preview',
       disabled: !canPreview,
-      reason: canPreview ? 'Dry run only' : 'No devctl project',
+      reason: canPreview ? 'Docker dry run' : 'No devctl project',
     },
     {
       id: 'docker-doctor',
@@ -219,6 +268,41 @@ function actionsFor(project: ProjectConfig, hasDocker: boolean): SafeAction[] {
       reason: hasDocker ? 'Read-only' : 'No Docker state',
     },
   ]
+}
+
+function runtimeForProject(
+  pkg: PackageSummary | null,
+  listeners: ListenerPort[] = [],
+  registryProcesses: ProjectRuntimeProcess[] = [],
+  history: ProjectRuntimeHistoryEntry[] = [],
+): ProjectRuntimeSummary {
+  const targets = getRunTargets(pkg)
+  const listenerProcesses = listeners
+    .filter((listener): listener is ListenerPort & { pid: number } => (
+      listener.pid !== null && listener.projectMatch === 'process-cwd'
+    ))
+    .map((listener): ProjectRuntimeProcess => ({
+      bindIp: listener.bindIp,
+      command: listener.command,
+      pid: listener.pid,
+      port: listener.port,
+      scope: listener.scope,
+      source: 'listener',
+    }))
+  const ownedProcesses = [...listenerProcesses, ...registryProcesses]
+
+  const uniqueProcessCount = new Set(ownedProcesses.map((process) => process.pid)).size
+
+  return {
+    history,
+    ownedProcesses,
+    primaryTarget: targets[0] ?? null,
+    status: ownedProcesses.length ? 'running' : 'stopped',
+    stopReason: ownedProcesses.length
+      ? `${uniqueProcessCount} owned process${uniqueProcessCount === 1 ? '' : 'es'}`
+      : 'No project-owned process',
+    targets,
+  }
 }
 
 function statusFor(
@@ -253,7 +337,7 @@ function signalsFor(
   return signals
 }
 
-function parseListeners(output: string): ListenerPort[] {
+export function parseListeners(output: string, localSuitePid = process.pid): ListenerPort[] {
   const rows = output.split('\n').slice(1)
   const listeners: ListenerPort[] = []
 
@@ -263,6 +347,7 @@ function parseListeners(output: string): ListenerPort[] {
     const [, command = '', pid = '', address = ''] = match
     const portMatch = address.match(/(.+):(\d+)$/)
     if (!portMatch) continue
+    const numericPid = Number(pid)
     const bindIp = portMatch[1] ?? ''
     const scope = bindIp === '*' || bindIp === '0.0.0.0' || bindIp === '[::]'
       ? 'public'
@@ -272,14 +357,180 @@ function parseListeners(output: string): ListenerPort[] {
 
     listeners.push({
       command,
-      pid: Number(pid),
+      pid: numericPid,
       bindIp,
       port: portMatch[2] ?? '',
       scope,
+      owner: numericPid === localSuitePid ? 'local-suite' : 'external',
+      projectId: null,
+      projectMatch: null,
+      ruleKey: listenerRuleKey({
+        bindIp,
+        command,
+        port: portMatch[2] ?? '',
+        scope,
+      }),
+      classification: null,
+      classificationReason: null,
     })
   }
 
   return listeners
+}
+
+export function parseListenerCwdOutput(output: string): Map<number, string> {
+  const cwds = new Map<number, string>()
+  let currentPid: number | null = null
+
+  for (const line of output.split('\n')) {
+    if (line.startsWith('p')) {
+      const parsedPid = Number(line.slice(1))
+      currentPid = Number.isInteger(parsedPid) ? parsedPid : null
+      continue
+    }
+
+    if (currentPid !== null && line.startsWith('n')) {
+      const cwd = line.slice(1).trim()
+      if (cwd) cwds.set(currentPid, cwd)
+    }
+  }
+
+  return cwds
+}
+
+async function readListenerCwds(listeners: ListenerPort[]): Promise<Map<number, string>> {
+  const pids = Array.from(
+    new Set(
+      listeners
+        .map((listener) => listener.pid)
+        .filter((pid): pid is number => pid !== null && Number.isInteger(pid) && pid > 0),
+    ),
+  ).slice(0, 200)
+
+  if (!pids.length) return new Map()
+
+  const result = await runCommand('lsof', ['-nP', '-a', '-d', 'cwd', '-p', pids.join(','), '-Fpn'], {
+    timeoutMs: 8_000,
+    maxOutputChars: 60_000,
+  })
+
+  return parseListenerCwdOutput(result.stdout)
+}
+
+export async function findRuntimeProcessesForProject(projectPath: string): Promise<ProjectRuntimeProcess[]> {
+  const listeners = await collectListeners()
+  const processCwds = await readListenerCwds(listeners)
+  const resolvedProjectPath = path.resolve(projectPath)
+
+  return listeners
+    .filter((listener): listener is ListenerPort & { pid: number } => {
+      if (listener.pid === null || listener.owner === 'local-suite') return false
+      const cwd = processCwds.get(listener.pid)
+      if (!cwd) return false
+      const resolvedCwd = path.resolve(cwd)
+      return resolvedCwd === resolvedProjectPath || resolvedCwd.startsWith(`${resolvedProjectPath}${path.sep}`)
+    })
+    .map((listener) => ({
+      bindIp: listener.bindIp,
+      command: listener.command,
+      pid: listener.pid,
+      port: listener.port,
+      scope: listener.scope,
+    }))
+}
+
+export function correlateListenersToProjects(
+  listeners: ListenerPort[],
+  projects: ProjectSummary[],
+  processCwds: Map<number, string> = new Map(),
+): ListenerPort[] {
+  const localSuiteProject = projects.find((project) => project.id === 'local-suite') ?? null
+  const dockerIndex = buildDockerPortIndex(projects)
+
+  return listeners.map((listener) => {
+    const localSuiteMatch = listener.owner === 'local-suite' ? localSuiteProject?.id ?? null : null
+    if (localSuiteMatch) {
+      return {
+        ...listener,
+        projectId: localSuiteMatch,
+        projectMatch: 'local-suite',
+      }
+    }
+
+    const dockerMatch = findDockerPortProject(listener, dockerIndex)
+    if (dockerMatch) {
+      return {
+        ...listener,
+        projectId: dockerMatch,
+        projectMatch: 'docker-port',
+      }
+    }
+
+    const cwd = listener.pid === null ? null : processCwds.get(listener.pid) ?? null
+    const cwdMatch = cwd ? findProjectForPath(projects, cwd)?.id ?? null : null
+    if (cwdMatch) {
+      return {
+        ...listener,
+        projectId: cwdMatch,
+        projectMatch: 'process-cwd',
+      }
+    }
+
+    return listener
+  })
+}
+
+interface DockerPortIndex {
+  exact: Map<string, string | null>
+  byPort: Map<string, string | null>
+}
+
+function buildDockerPortIndex(projects: ProjectSummary[]): DockerPortIndex {
+  const exact = new Map<string, string | null>()
+  const byPort = new Map<string, string | null>()
+
+  for (const project of projects) {
+    for (const dockerPort of project.docker?.ports ?? []) {
+      if (!dockerPort.hostPort) continue
+      setUniqueIndexValue(exact, `${normalizeBindIp(dockerPort.hostIp)}:${dockerPort.hostPort}`, project.id)
+      setUniqueIndexValue(byPort, dockerPort.hostPort, project.id)
+    }
+  }
+
+  return { exact, byPort }
+}
+
+function setUniqueIndexValue(index: Map<string, string | null>, key: string, value: string): void {
+  const existing = index.get(key)
+  if (existing === undefined || existing === value) {
+    index.set(key, value)
+    return
+  }
+  index.set(key, null)
+}
+
+function findDockerPortProject(listener: ListenerPort, index: DockerPortIndex): string | null {
+  const exactMatch = index.exact.get(`${normalizeBindIp(listener.bindIp)}:${listener.port}`)
+  if (exactMatch !== undefined) return exactMatch
+
+  const portMatch = index.byPort.get(listener.port)
+  return portMatch ?? null
+}
+
+function findProjectForPath(projects: ProjectSummary[], cwd: string): ProjectSummary | null {
+  const resolvedCwd = path.resolve(cwd)
+  const matches = projects.filter((project) => {
+    const projectPath = path.resolve(project.path)
+    return resolvedCwd === projectPath || resolvedCwd.startsWith(`${projectPath}${path.sep}`)
+  })
+
+  return matches.sort((left, right) => right.path.length - left.path.length)[0] ?? null
+}
+
+function normalizeBindIp(bindIp: string): string {
+  if (!bindIp || bindIp === '*' || bindIp === '0.0.0.0' || bindIp === '::' || bindIp === '[::]') return '*'
+  if (bindIp === 'localhost' || bindIp === '[::1]') return '127.0.0.1'
+  return bindIp
 }
 
 async function collectListeners(): Promise<ListenerPort[]> {
@@ -292,10 +543,14 @@ async function collectListeners(): Promise<ListenerPort[]> {
 }
 
 export async function buildSnapshot(config: SuiteConfig): Promise<LocalSuiteSnapshot> {
-  const [devctl, discoveredProjects, listeners] = await Promise.all([
-    collectDevctl(config),
-    discoverRootProjects(config.developerRoot),
-    collectListeners(),
+  const startedAt = performance.now()
+  const phases: Record<string, number> = {}
+  const [devctl, discoveredProjects, listeners, listenerRules, registrySnapshot] = await Promise.all([
+    timePhase(phases, 'devctl', () => collectDevctl(config)),
+    timePhase(phases, 'discoverProjects', () => discoverRootProjects(config.developerRoot)),
+    timePhase(phases, 'listeners', collectListeners),
+    timePhase(phases, 'listenerRules', readListenerRules),
+    timePhase(phases, 'processRegistry', () => readProcessRegistrySnapshot()),
   ])
 
   const configuredByPath = new Map(config.projects.map((project) => [path.resolve(project.path), project]))
@@ -306,7 +561,7 @@ export async function buildSnapshot(config: SuiteConfig): Promise<LocalSuiteSnap
     projects.push(discovered)
   }
 
-  const summaries = await Promise.all(projects.map(async (project): Promise<ProjectSummary> => {
+  const summaries = await timePhase(phases, 'projectSummaries', () => Promise.all(projects.map(async (project): Promise<ProjectSummary> => {
     const exists = await pathExists(project.path)
     const [git, pkg] = exists
       ? await Promise.all([readGitSummary(project.path), readPackageSummary(project.path)])
@@ -338,10 +593,16 @@ export async function buildSnapshot(config: SuiteConfig): Promise<LocalSuiteSnap
       signals: signalsFor(exists, git, docker, pkg),
       git,
       package: pkg,
+      runtime: runtimeForProject(
+        pkg,
+        [],
+        registryRuntimeProcessesForProject(project, registrySnapshot.activeEntries),
+        registryHistoryForProject(project, registrySnapshot.entries),
+      ),
       docker,
-      actions: actionsFor(project, Boolean(docker)),
+      actions: [],
     }
-  }))
+  })))
 
   const sortedProjects = summaries.sort((a, b) => {
     const priorityRank = { active: 0, watch: 1, archive: 2 }
@@ -352,21 +613,54 @@ export async function buildSnapshot(config: SuiteConfig): Promise<LocalSuiteSnap
       || a.displayName.localeCompare(b.displayName)
     )
   })
+  const listenerCwds = await timePhase(phases, 'listenerCwds', () => readListenerCwds(listeners))
+  const classifiedListeners = await timePhase(phases, 'listenerCorrelation', async () => {
+    const correlatedListeners = correlateListenersToProjects(listeners, sortedProjects, listenerCwds)
+    return applyListenerRulesToListeners(correlatedListeners, listenerRules)
+  })
+  const projectsWithRuntime = sortedProjects.map((project) => {
+    const projectConfig = projects.find((candidate) => candidate.id === project.id) ?? {
+      id: project.id,
+      displayName: project.displayName,
+      path: project.path,
+      kind: project.kind,
+      priority: project.priority,
+      tags: project.tags,
+    }
+    const runtime = runtimeForProject(
+      project.package,
+      classifiedListeners.filter((listener) => listener.projectId === project.id),
+      registryRuntimeProcessesForProject(projectConfig, registrySnapshot.activeEntries),
+      registryHistoryForProject(projectConfig, registrySnapshot.entries),
+    )
+
+    return {
+      ...project,
+      runtime,
+      actions: actionsFor(projectConfig, Boolean(project.docker), runtime),
+    }
+  })
 
   return {
     generatedAt: new Date().toISOString(),
     roots: [config.developerRoot],
     summary: {
       configuredProjects: config.projects.length,
-      discoveredProjects: sortedProjects.filter((project) => project.source === 'discovered').length,
-      activeProjects: sortedProjects.filter((project) => project.priority === 'active').length,
-      attentionProjects: sortedProjects.filter((project) => project.status === 'attention').length,
-      dirtyRepos: sortedProjects.filter((project) => project.git.status === 'dirty').length,
-      packageProjects: sortedProjects.filter((project) => project.package).length,
+      discoveredProjects: projectsWithRuntime.filter((project) => project.source === 'discovered').length,
+      activeProjects: projectsWithRuntime.filter((project) => project.priority === 'active').length,
+      attentionProjects: projectsWithRuntime.filter((project) => project.status === 'attention').length,
+      dirtyRepos: projectsWithRuntime.filter((project) => project.git.status === 'dirty').length,
+      packageProjects: projectsWithRuntime.filter((project) => project.package).length,
     },
     docker: devctl.fleet,
-    projects: sortedProjects,
-    listeners,
+    projects: projectsWithRuntime,
+    listeners: classifiedListeners,
+    listenerRules: summarizeListenerRules(listenerRules),
+    dockerState: devctl.cache,
+    timing: {
+      totalMs: Math.round(performance.now() - startedAt),
+      phases,
+    },
     warnings: devctl.warnings,
   }
 }

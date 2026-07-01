@@ -9,6 +9,13 @@ export function formatPercent(value: number): string {
   return `${value.toFixed(2)}%`
 }
 
+export function formatDuration(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms)) return '-'
+  if (ms < 1_000) return `${Math.round(ms)}ms`
+  if (ms < 60_000) return `${(ms / 1_000).toFixed(ms < 10_000 ? 1 : 0)}s`
+  return `${Math.round(ms / 60_000)}m`
+}
+
 export function formatTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '-'

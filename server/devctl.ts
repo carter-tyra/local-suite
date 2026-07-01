@@ -3,9 +3,12 @@ import type {
   DockerFleetSummary,
   DockerPort,
   DockerProjectSummary,
+  DockerStateInfo,
 } from '../src/shared/types.ts'
 import type { SuiteConfig } from './config.ts'
-import { renderCommand, runCommand } from './command.ts'
+import { renderCommand, runCommand, type CommandResult } from './command.ts'
+
+export const DEVCTL_CACHE_FRESH_MS = 30_000
 
 interface RawDockerPort {
   host_ip?: string
@@ -24,6 +27,7 @@ interface RawDockerContainer {
   status?: string
   health?: string
   cpu?: number
+  compose_project?: string
   mem_mib?: number
   mem_usage?: string
   working_dir?: string
@@ -55,11 +59,31 @@ interface RawDevctlState {
 }
 
 export interface DevctlState {
+  cache: DockerStateInfo
   raw: RawDevctlState | null
   projects: Map<string, DockerProjectSummary>
   byRegistryName: Map<string, DockerProjectSummary>
   fleet: DockerFleetSummary
   warnings: string[]
+}
+
+type NormalizedDevctlState = Omit<DevctlState, 'cache'>
+
+interface DevctlCollectorOptions {
+  freshMs?: number
+  now?: () => number
+  run?: (command: string, args: string[], options?: { cwd?: string; timeoutMs?: number; maxOutputChars?: number }) => Promise<CommandResult>
+}
+
+interface DevctlCacheEntry {
+  completedAtMs: number
+  key: string
+  state: NormalizedDevctlState
+}
+
+export interface DevctlCollector {
+  collect: (config: SuiteConfig) => Promise<DevctlState>
+  invalidate: () => void
 }
 
 function toPort(port: RawDockerPort): DockerPort {
@@ -89,6 +113,28 @@ function toContainer(container: RawDockerContainer): DockerContainerSummary {
   }
 }
 
+function formatPublicPort(port: DockerPort): string {
+  const hostIp = port.hostIp || '*'
+  const target = port.target.split('/', 1)[0] || port.target
+  return `${hostIp}:${port.hostPort}->${target}`
+}
+
+function publicPortsMessage(raw: RawDevctlState): string {
+  if (raw.docker_unavailable) return 'No Docker ports are exposed while Docker Desktop is stopped.'
+
+  const rows: string[] = []
+  for (const container of raw.containers ?? []) {
+    if (!container.running) continue
+    for (const rawPort of container.ports ?? []) {
+      const port = toPort(rawPort)
+      if (!port.public) continue
+      rows.push(`${container.name ?? 'container'} ${container.compose_project ?? 'standalone'} ${formatPublicPort(port)}`)
+    }
+  }
+
+  return rows.length ? rows.join('\n') : 'No matching exposed ports.'
+}
+
 function formatDisk(rows: Array<Record<string, string>> | undefined): string[] {
   if (!rows?.length) return []
   return rows.map((row) => {
@@ -114,18 +160,15 @@ function emptyFleet(publicPortsMessage: string): DockerFleetSummary {
   }
 }
 
-export async function collectDevctl(config: SuiteConfig): Promise<DevctlState> {
-  const status = await runCommand(config.devctlPath, ['--json', 'status'], {
+async function collectFreshDevctl(
+  config: SuiteConfig,
+  run: NonNullable<DevctlCollectorOptions['run']>,
+): Promise<NormalizedDevctlState> {
+  const status = await run(config.devctlPath, ['--json', 'status'], {
     timeoutMs: 25_000,
     maxOutputChars: 200_000,
   })
-  const publicPorts = await runCommand(config.devctlPath, ['ports', '--public'], {
-    timeoutMs: 15_000,
-    maxOutputChars: 20_000,
-  })
-
   const warnings: string[] = []
-  const publicPortsMessage = publicPorts.stdout.trim() || publicPorts.stderr.trim() || 'Public port check unavailable.'
 
   if (status.exitCode !== 0) {
     warnings.push(`devctl status failed: ${status.stderr || status.stdout}`)
@@ -133,7 +176,7 @@ export async function collectDevctl(config: SuiteConfig): Promise<DevctlState> {
       raw: null,
       projects: new Map(),
       byRegistryName: new Map(),
-      fleet: emptyFleet(publicPortsMessage),
+      fleet: emptyFleet('Public port check unavailable.'),
       warnings,
     }
   }
@@ -147,11 +190,12 @@ export async function collectDevctl(config: SuiteConfig): Promise<DevctlState> {
       raw: null,
       projects: new Map(),
       byRegistryName: new Map(),
-      fleet: emptyFleet(publicPortsMessage),
+      fleet: emptyFleet('Public port check unavailable.'),
       warnings,
     }
   }
 
+  const publicPorts = publicPortsMessage(raw)
   const projects = new Map<string, DockerProjectSummary>()
   const byRegistryName = new Map<string, DockerProjectSummary>()
 
@@ -194,10 +238,77 @@ export async function collectDevctl(config: SuiteConfig): Promise<DevctlState> {
       publicPortCount,
       registryProjectCount: raw.registry?.projects?.length ?? 0,
       disk: formatDisk(raw.system_df),
-      publicPortsMessage,
+      publicPortsMessage: publicPorts,
     },
     warnings,
   }
+}
+
+export function createDevctlCollector(options: DevctlCollectorOptions = {}): DevctlCollector {
+  const freshMs = options.freshMs ?? DEVCTL_CACHE_FRESH_MS
+  const now = options.now ?? Date.now
+  const run = options.run ?? runCommand
+  let cache: DevctlCacheEntry | null = null
+  let refresh: Promise<DevctlCacheEntry> | null = null
+  let refreshKey: string | null = null
+  let generation = 0
+
+  const cacheKey = (config: SuiteConfig): string => config.devctlPath
+  const isFresh = (entry: DevctlCacheEntry): boolean => now() - entry.completedAtMs <= freshMs
+  const withCacheInfo = (entry: DevctlCacheEntry, source: DockerStateInfo['source']): DevctlState => ({
+    ...entry.state,
+    cache: {
+      ageMs: Math.max(0, Math.round(now() - entry.completedAtMs)),
+      freshForMs: freshMs,
+      generatedAt: new Date(entry.completedAtMs).toISOString(),
+      source,
+    },
+  })
+
+  return {
+    async collect(config: SuiteConfig): Promise<DevctlState> {
+      const key = cacheKey(config)
+      if (cache?.key === key && isFresh(cache)) return withCacheInfo(cache, 'cached')
+      if (refresh && refreshKey === key) return withCacheInfo(await refresh, 'fresh')
+
+      refreshKey = key
+      const refreshGeneration = generation
+      const currentRefresh = collectFreshDevctl(config, run)
+        .then((state) => {
+          const entry = { completedAtMs: now(), key, state }
+          if (refreshGeneration === generation) {
+            cache = entry
+          }
+          return entry
+        })
+        .finally(() => {
+          if (refresh === currentRefresh) {
+            refresh = null
+            refreshKey = null
+          }
+        })
+      refresh = currentRefresh
+
+      return withCacheInfo(await currentRefresh, 'fresh')
+    },
+
+    invalidate(): void {
+      generation += 1
+      cache = null
+      refresh = null
+      refreshKey = null
+    },
+  }
+}
+
+const devctlCollector = createDevctlCollector()
+
+export async function collectDevctl(config: SuiteConfig): Promise<DevctlState> {
+  return devctlCollector.collect(config)
+}
+
+export function invalidateDevctlCache(): void {
+  devctlCollector.invalidate()
 }
 
 export async function runDevctlActionPreview(
